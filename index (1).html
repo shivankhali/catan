@@ -1,0 +1,396 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Catan Table Helper</title>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<style>
+  :root{
+    --bg:#1d1a16; --panel:#2a2520; --panel2:#352f28; --ink:#f3ead9; --muted:#a99b85;
+    --accent:#e0a63a; --good:#5fb36a; --bad:#d9534f; --line:#443c32;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;line-height:1.4}
+  h1,h2,h3{margin:0 0 .5rem}
+  h1{font-size:1.5rem} h2{font-size:1.05rem;color:var(--accent);text-transform:uppercase;letter-spacing:.06em}
+  .wrap{max-width:1000px;margin:0 auto;padding:14px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:14px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:760px){.grid{grid-template-columns:1fr}}
+  button{background:var(--accent);color:#2a1e08;border:0;border-radius:10px;padding:10px 16px;font-size:1rem;font-weight:700;cursor:pointer}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  button.ghost{background:var(--panel2);color:var(--ink);border:1px solid var(--line)}
+  button.small{padding:5px 10px;font-size:.85rem;border-radius:8px}
+  button.good{background:var(--good);color:#06200a} button.bad{background:var(--bad);color:#fff}
+  input{background:var(--panel2);border:1px solid var(--line);color:var(--ink);border-radius:10px;padding:10px;font-size:1rem;width:100%}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .muted{color:var(--muted);font-size:.9rem}
+  .dot{display:inline-block;width:12px;height:12px;border-radius:50%;margin-right:6px;border:1px solid #0006}
+  .player{display:flex;justify-content:space-between;align-items:center;padding:7px 10px;border-radius:9px;margin-bottom:5px;background:var(--panel2)}
+  .player.turn{outline:2px solid var(--accent)}
+  .off{opacity:.45}
+  .dice{font-size:4.2rem;line-height:1;letter-spacing:.1em;text-align:center}
+  .dice.shake{animation:sh .45s}
+  @keyframes sh{0%{transform:rotate(0)}25%{transform:rotate(-12deg) scale(1.1)}50%{transform:rotate(10deg)}75%{transform:rotate(-6deg)}100%{transform:rotate(0)}}
+  .total{text-align:center;font-size:1.6rem;font-weight:800}
+  .robber{background:#4a1f1d;border:2px solid var(--bad);border-radius:12px;padding:12px;margin:10px 0}
+  .code{font-size:2.2rem;font-weight:900;letter-spacing:.25em;color:var(--accent)}
+  .hist{display:flex;align-items:flex-end;gap:5px;height:150px;margin-top:8px;border-bottom:1px solid var(--line)}
+  .col{flex:1;position:relative;height:100%;display:flex;flex-direction:column;justify-content:flex-end;align-items:center}
+  .bar{width:100%;background:var(--accent);border-radius:4px 4px 0 0;min-height:0}
+  .bar.seven{background:var(--bad)}
+  .exp{position:absolute;left:-2px;right:-2px;border-top:2px dashed #fff9;pointer-events:none}
+  .cnt{font-size:.75rem;color:var(--muted);position:absolute;top:-16px;width:100%;text-align:center}
+  .labels{display:flex;gap:5px;margin-top:3px}.labels div{flex:1;text-align:center;font-size:.8rem;color:var(--muted)}
+  .res{display:flex;align-items:center;justify-content:space-between;background:var(--panel2);border-radius:9px;padding:4px 8px;margin-bottom:4px}
+  .step{display:flex;align-items:center;gap:8px}.step b{min-width:1.2em;text-align:center}
+  .step button{padding:2px 10px;font-size:1.1rem}
+  .trade{border:1px solid var(--line);border-radius:10px;padding:10px;margin-bottom:8px;background:var(--panel2)}
+  .trade.done{opacity:.6}
+  .pill{display:inline-block;background:var(--panel);border-radius:99px;padding:2px 9px;margin:2px 3px 2px 0;font-size:.9rem}
+  .manual{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}
+  .manual button{padding:6px 10px}
+  #toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:#000c;padding:10px 16px;border-radius:10px;display:none;z-index:9}
+  .banner{background:#5a2b1c;padding:8px 12px;border-radius:10px;margin-bottom:10px;display:none}
+  details summary{cursor:pointer;color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap" id="app"></div>
+<div id="toast"></div>
+
+<script>
+/* ============ Catan Table Helper ============
+   Host-authoritative state over PeerJS (WebRTC). The host's browser keeps the
+   game state; friends send actions and receive the full state back.
+   The app never tracks hands/cards - those stay on the physical table.
+*/
+const RES=[['wood','🌲','Wood'],['brick','🧱','Brick'],['sheep','🐑','Sheep'],['wheat','🌾','Wheat'],['ore','⛰️','Ore']];
+const COLORS=['#d9534f','#3d7edb','#e8912a','#eeeeee','#3fa35b','#a455c9'];
+const FACES=['⚀','⚁','⚂','⚃','⚄','⚅'];
+const WAYS={2:1,3:2,4:3,5:4,6:5,7:6,8:5,9:4,10:3,11:2,12:1};
+const PREFIX='catantable-';
+
+let peer=null, hostConn=null, conns={}, S=null, isHost=false, code='', reconnectTimer=null;
+let draft=freshDraft(), shakeNext=false, lastRollId=null, connState='ok';
+const me={pid:localStorage.cp_pid||(localStorage.cp_pid=Math.random().toString(36).slice(2,10)),
+          name:localStorage.cp_name||''};
+
+function freshDraft(){return{give:{},want:{},giveAny:0,wantAny:0}}
+const $=s=>document.querySelector(s);
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function toast(t){const e=$('#toast');e.textContent=t;e.style.display='block';clearTimeout(toast.t);toast.t=setTimeout(()=>e.style.display='none',3000)}
+function rnd6(){const a=new Uint32Array(1);let v;do{crypto.getRandomValues(a);v=a[0]}while(v>=4294967292);return v%6+1}
+function genCode(){const L='ABCDEFGHJKLMNPQRSTUVWXYZ';let s='';for(let i=0;i<4;i++)s+=L[Math.floor(Math.random()*L.length)];return s}
+
+/* ---------- state ---------- */
+function newState(){return{started:false,players:[],turn:0,rolled:false,robber:false,rolls:[],trades:[],tid:0,rid:0}}
+function player(id){return S.players.find(p=>p.id===id)}
+function nameOf(id){const p=player(id);return p?p.name:'?'}
+
+function act(pid,m){
+  const host=S.players[0]&&S.players[0].id===pid;
+  const cur=S.players[S.turn];
+  switch(m.t){
+    case 'start': if(host){S.started=true;S.turn=0;S.rolled=false}break;
+    case 'shuffle': if(host&&!S.started){S.players.sort(()=>Math.random()-.5)}break;
+    case 'reset': if(host){S.rolls=[];S.trades=[];S.turn=0;S.rolled=false;S.robber=false;S.started=false}break;
+    case 'roll':{
+      if(!S.started||!cur||(cur.id!==pid&&!host)||S.rolled)break;
+      let d1=null,d2=null,n;
+      if(m.n){n=Math.max(2,Math.min(12,m.n|0))} else {d1=rnd6();d2=rnd6();n=d1+d2}
+      S.rolls.push({id:++S.rid,p:cur.id,d1,d2,n});S.rolled=true;if(n===7)S.robber=true;break}
+    case 'undoRoll': if(S.rolled&&(cur.id===pid||host)&&S.rolls.length){S.rolls.pop();S.rolled=false;S.robber=false}break;
+    case 'end': if(cur&&(cur.id===pid||host)){S.turn=(S.turn+1)%S.players.length;S.rolled=false;S.robber=false}break;
+    case 'robberDone': S.robber=false;break;
+    case 'trade':{
+      const clean=o=>{const r={};RES.forEach(([k])=>{const v=Math.max(0,Math.min(9,(o&&o[k])|0));if(v)r[k]=v});return r};
+      const o=m.offer||{};
+      const t={id:++S.tid,from:pid,give:clean(o.give),want:clean(o.want),
+        giveAny:Math.max(0,Math.min(9,o.giveAny|0)),wantAny:Math.max(0,Math.min(9,o.wantAny|0)),
+        status:'open',accepts:[],with:null};
+      const g=Object.keys(t.give).length+t.giveAny, w=Object.keys(t.want).length+t.wantAny;
+      if(g&&w)S.trades.push(t);break}
+    case 'accept':{const t=S.trades.find(x=>x.id===m.id);
+      if(t&&t.status==='open'&&t.from!==pid){const i=t.accepts.indexOf(pid);i>=0?t.accepts.splice(i,1):t.accepts.push(pid)}break}
+    case 'cancel':{const t=S.trades.find(x=>x.id===m.id);if(t&&t.from===pid&&t.status==='open')t.status='cancelled';break}
+    case 'confirm':{const t=S.trades.find(x=>x.id===m.id);
+      if(t&&t.from===pid&&t.status==='open'&&t.accepts.includes(m.with)){t.status='done';t.with=m.with}break}
+  }
+}
+
+/* ---------- networking ---------- */
+function broadcast(){
+  if(isHost){
+    try{localStorage.cp_host=JSON.stringify({code,S})}catch(e){}
+    Object.values(conns).forEach(c=>c.open&&c.send({t:'state',S}));
+  }
+  render();
+}
+function send(m){
+  if(isHost){act(me.pid,m);broadcast()}
+  else if(hostConn&&hostConn.open)hostConn.send(m);
+  else toast('Not connected to the host yet…');
+}
+function addPlayer(id,name){
+  let p=player(id);
+  if(p){p.name=name;p.connected=true;return}
+  const used=S.players.map(x=>x.color);
+  const color=COLORS.find(c=>!used.includes(c))||'#888';
+  S.players.push({id,name,color,connected:true});
+}
+
+function startHost(name,resume){
+  me.name=name;localStorage.cp_name=name;
+  connState='connecting';render();
+  const tryCode=resume?resume.code:genCode();
+  peer=new Peer(PREFIX+tryCode);
+  peer.on('open',()=>{
+    code=tryCode;isHost=true;S=resume?resume.S:newState();
+    S.players.forEach(p=>{if(p.id!==me.pid)p.connected=false});
+    addPlayer(me.pid,name);if(S.players[0].id!==me.pid&&!resume){}
+    connState='ok';broadcast();
+  });
+  peer.on('connection',c=>{
+    c.on('data',m=>{
+      if(m.t==='join'){
+        c.pid=m.pid;conns[m.pid]=c;addPlayer(m.pid,String(m.name).slice(0,16)||'Player');broadcast();
+      } else if(c.pid){act(c.pid,m);broadcast()}
+    });
+    c.on('close',()=>{if(c.pid&&conns[c.pid]===c){const p=player(c.pid);if(p)p.connected=false;delete conns[c.pid];broadcast()}});
+  });
+  peer.on('error',e=>{
+    if(e.type==='unavailable-id'){
+      peer.destroy();
+      if(resume){setTimeout(()=>startHost(name,resume),2500)} else startHost(name);
+    } else {toast('Network error: '+e.type);connState='error';render()}
+  });
+}
+
+function joinGame(name,roomCode){
+  me.name=name;localStorage.cp_name=name;
+  code=roomCode.toUpperCase().trim();
+  localStorage.cp_join=code;
+  connState='connecting';render();
+  if(peer)peer.destroy();
+  peer=new Peer();
+  peer.on('open',()=>connectToHost());
+  peer.on('error',e=>{
+    if(e.type==='peer-unavailable'){connState='nohost';render();scheduleReconnect()}
+    else{toast('Network error: '+e.type);scheduleReconnect()}
+  });
+}
+function connectToHost(){
+  hostConn=peer.connect(PREFIX+code,{reliable:true});
+  hostConn.on('open',()=>{connState='ok';hostConn.send({t:'join',pid:me.pid,name:me.name});render()});
+  hostConn.on('data',m=>{if(m.t==='state'){S=m.S;render()}});
+  hostConn.on('close',()=>{connState='lost';render();scheduleReconnect()});
+}
+function scheduleReconnect(){
+  clearTimeout(reconnectTimer);
+  reconnectTimer=setTimeout(()=>{
+    if(!peer||peer.destroyed){joinGame(me.name,code);return}
+    if(peer.disconnected)peer.reconnect();
+    connectToHost();
+  },3000);
+}
+function leave(){
+  localStorage.removeItem('cp_host');localStorage.removeItem('cp_join');
+  location.reload();
+}
+
+/* ---------- rendering ---------- */
+function resLine(obj,any){
+  let h='';
+  RES.forEach(([k,e])=>{if(obj[k])h+=`<span class="pill">${obj[k]}× ${e}</span>`});
+  if(any)h+=`<span class="pill">${any}× 🎲 any card</span>`;
+  return h||'<span class="muted">nothing</span>';
+}
+
+function render(){
+  const app=$('#app');
+  if(!S){
+    const saved=(()=>{try{return JSON.parse(localStorage.cp_host||'null')}catch(e){return null}})();
+    const lastJoin=localStorage.cp_join||'';
+    app.innerHTML=`
+      <h1>🎲 Catan Table Helper</h1>
+      <p class="muted">A companion for in-person Catan: shared dice, roll stats, robber reminders and fast trade offers. Cards, board and bargaining stay on the table.</p>
+      <div class="card"><h2>Your name</h2>
+        <input id="nm" maxlength="16" placeholder="Name" value="${esc(me.name)}"></div>
+      <div class="grid">
+        <div class="card"><h2>Host a game</h2><p class="muted">You get a 4-letter code to share. Keep this tab open during the game.</p>
+          <button id="host">Create room</button>
+          ${saved?`<p class="muted">Unfinished game found (${esc(saved.code)}).</p><button class="ghost" id="resume">Resume hosting ${esc(saved.code)}</button>`:''}</div>
+        <div class="card"><h2>Join a game</h2>
+          <input id="rc" maxlength="4" placeholder="CODE" value="${esc(lastJoin)}" style="text-transform:uppercase;letter-spacing:.3em;font-size:1.4rem;text-align:center">
+          <div style="height:8px"></div><button id="join">Join</button></div>
+      </div>
+      ${connState==='connecting'?'<p class="muted">Connecting…</p>':''}
+      ${connState==='nohost'?'<p class="muted">Room not found yet — retrying. Check the code.</p>':''}`;
+    const nm=()=>{const v=$('#nm').value.trim();if(!v){toast('Enter your name first');return null}return v};
+    $('#host').onclick=()=>{const n=nm();if(n)startHost(n)};
+    if($('#resume'))$('#resume').onclick=()=>{const n=nm();if(n)startHost(n,saved)};
+    $('#join').onclick=()=>{const n=nm(),c=$('#rc').value.trim();if(n&&c.length===4)joinGame(n,c);else if(n)toast('Enter the 4-letter code')};
+    return;
+  }
+
+  const cur=S.players[S.turn];
+  const myTurn=cur&&cur.id===me.pid;
+  const amHost=S.players[0]&&S.players[0].id===me.pid;
+  const last=S.rolls[S.rolls.length-1];
+  const sevens=S.rolls.filter(r=>r.n===7).length;
+  const bannerMsg=connState==='lost'?'Disconnected from host — reconnecting…':connState==='nohost'?'Host not found — retrying…':'';
+
+  let html=`<div class="banner" style="display:${bannerMsg?'block':'none'}">${bannerMsg}</div>
+  <div class="row" style="justify-content:space-between;margin-bottom:10px">
+    <h1>🎲 Catan Table Helper</h1>
+    <div class="row"><span class="muted">Room</span><span class="code" style="font-size:1.4rem">${esc(code)}</span>
+    <button class="ghost small" id="leave">Leave</button></div>
+  </div>
+  <div class="grid">
+   <div>
+    <div class="card"><h2>Players</h2>
+      ${S.players.map((p,i)=>`<div class="player ${S.started&&i===S.turn?'turn':''} ${p.connected?'':'off'}">
+        <span><span class="dot" style="background:${p.color}"></span>${esc(p.name)}${p.id===me.pid?' (you)':''}${i===0?' 👑':''}</span>
+        <span class="muted">${S.started&&i===S.turn?'🎯 rolling':''}${p.connected?'':' offline'}</span></div>`).join('')}
+      ${!S.started?`<div class="row" style="margin-top:8px">
+        ${amHost?`<button id="start" ${S.players.length<2?'disabled':''}>Start game</button><button class="ghost" id="shuffle">Shuffle order</button>`
+                :'<span class="muted">Waiting for the host to start…</span>'}</div>
+        <p class="muted">Share code <b>${esc(code)}</b> with your friends. Join order = turn order.</p>`:''}
+    </div>
+
+    <div class="card"><h2>Dice</h2>
+      ${S.started?`
+        <div class="muted" style="text-align:center">${myTurn?'<b style="color:var(--accent)">Your turn!</b>':esc(cur.name)+'’s turn'}</div>
+        ${last?`<div class="dice ${shakeNext?'shake':''}">${last.d1?FACES[last.d1-1]+' '+FACES[last.d2-1]:'🎲'}</div>
+          <div class="total">${last.n}</div>
+          <div class="muted" style="text-align:center">${esc(nameOf(last.p))} rolled${last.d1?'':' (physical dice)'}</div>`
+          :'<div class="dice">🎲</div>'}
+        ${S.robber?`<div class="robber"><b>🥷 Seven! Move the robber.</b><br>
+          Anyone holding more than 7 cards discards half (rounded down). Then the roller moves the robber and steals one card.
+          <div style="margin-top:8px"><button class="small good" id="robberDone">Robber handled ✓</button></div></div>`:''}
+        <div class="row" style="justify-content:center;margin-top:10px">
+          <button id="roll" ${(myTurn||amHost)&&!S.rolled?'':'disabled'}>Roll dice</button>
+          <button class="ghost" id="end" ${(myTurn||amHost)&&S.rolled?'':'disabled'}>End turn</button>
+          ${(myTurn||amHost)&&S.rolled?'<button class="ghost small" id="undo">Undo roll</button>':''}
+        </div>
+        ${(myTurn||amHost)&&!S.rolled?`<details style="margin-top:8px"><summary>Rolled real dice? Enter the total</summary>
+          <div class="manual">${[2,3,4,5,6,7,8,9,10,11,12].map(n=>`<button class="ghost small man" data-n="${n}">${n}</button>`).join('')}</div></details>`:''}`
+      :'<p class="muted">Dice unlock once the host starts the game.</p>'}
+    </div>
+
+    <div class="card"><h2>Roll spread <span class="muted" style="text-transform:none;letter-spacing:0">(${S.rolls.length} rolls · ${sevens} sevens)</span></h2>
+      ${histogram()}
+      <p class="muted" style="margin-bottom:0">Dashed line = what pure luck would give. Red bar = 7s.</p>
+      ${S.rolls.length?`<details><summary>Recent rolls</summary><div style="margin-top:6px">${S.rolls.slice(-12).reverse().map(r=>`<span class="pill">${r.n} · ${esc(nameOf(r.p))}</span>`).join('')}</div></details>`:''}
+      ${amHost&&S.started?'<div style="margin-top:8px"><button class="ghost small bad" id="reset">End game / reset stats</button></div>':''}
+    </div>
+   </div>
+
+   <div>
+    <div class="card"><h2>New trade offer</h2>
+      <div class="muted">I give</div>${stepperRows('give')}
+      <div class="muted" style="margin-top:8px">I want</div>${stepperRows('want')}
+      <div class="row" style="margin-top:10px"><button id="offer">Offer to table</button><button class="ghost small" id="clear">Clear</button></div>
+      <p class="muted" style="margin-bottom:0">“Any card” = a random/unspecified card. Accepting only signals interest — you swap cards in person.</p>
+    </div>
+    <div class="card"><h2>Open offers</h2>${tradeList(true)}</div>
+    <div class="card"><h2>Recent deals</h2>${tradeList(false)}</div>
+   </div>
+  </div>`;
+  app.innerHTML=html;
+  wire();
+  shakeNext=false;
+}
+
+function histogram(){
+  const total=S.rolls.length;
+  const counts={};for(let n=2;n<=12;n++)counts[n]=0;S.rolls.forEach(r=>counts[r.n]++);
+  const exp={};for(let n=2;n<=12;n++)exp[n]=WAYS[n]/36*total;
+  const mx=Math.max(1,...Object.values(counts),...Object.values(exp));
+  let cols='',labels='';
+  for(let n=2;n<=12;n++){
+    cols+=`<div class="col"><div class="cnt">${counts[n]||''}</div>
+      <div class="bar ${n===7?'seven':''}" style="height:${counts[n]/mx*100}%"></div>
+      ${total?`<div class="exp" style="bottom:${exp[n]/mx*100}%"></div>`:''}</div>`;
+    labels+=`<div>${n}</div>`;
+  }
+  return `<div class="hist" style="margin-top:20px">${cols}</div><div class="labels">${labels}</div>`;
+}
+function stepperRows(side){
+  const rows=RES.map(([k,e,l])=>`<div class="res"><span>${e} ${l}</span>
+    <span class="step"><button class="ghost st" data-s="${side}" data-k="${k}" data-d="-1">−</button><b>${draft[side][k]||0}</b>
+    <button class="ghost st" data-s="${side}" data-k="${k}" data-d="1">+</button></span></div>`).join('');
+  const any=side+'Any';
+  return rows+`<div class="res"><span>🎲 Any card</span><span class="step">
+    <button class="ghost st" data-s="${any}" data-d="-1">−</button><b>${draft[any]}</b>
+    <button class="ghost st" data-s="${any}" data-d="1">+</button></span></div>`;
+}
+function tradeList(open){
+  const list=S.trades.filter(t=>open?t.status==='open':t.status!=='open').slice().reverse().slice(0,open?20:6);
+  if(!list.length)return `<p class="muted" style="margin:0">${open?'No offers right now.':'Nothing yet.'}</p>`;
+  return list.map(t=>{
+    const mine=t.from===me.pid, p=player(t.from), color=p?p.color:'#888';
+    let acts='';
+    if(t.status==='open'){
+      if(mine){
+        acts=(t.accepts.length?'<div class="muted">Interested:</div>'+t.accepts.map(a=>
+          `<button class="small good conf" data-id="${t.id}" data-w="${a}">Deal with ${esc(nameOf(a))}</button> `).join(''):'<span class="muted">Waiting for takers…</span>')
+          +` <button class="small ghost canc" data-id="${t.id}">Cancel</button>`;
+      } else {
+        const on=t.accepts.includes(me.pid);
+        acts=`<button class="small ${on?'ghost':'good'} acc" data-id="${t.id}">${on?'Withdraw interest':'I’ll take it'}</button>
+          ${t.accepts.length?`<span class="muted">${t.accepts.map(a=>esc(nameOf(a))).join(', ')} interested</span>`:''}`;
+      }
+    } else acts=`<span class="muted">${t.status==='done'?'✅ Dealt with '+esc(nameOf(t.with)):'❌ Cancelled'}</span>`;
+    return `<div class="trade ${t.status!=='open'?'done':''}">
+      <div><span class="dot" style="background:${color}"></span><b>${esc(nameOf(t.from))}</b></div>
+      <div>Gives: ${resLine(t.give,t.giveAny)}</div><div>Wants: ${resLine(t.want,t.wantAny)}</div>
+      <div style="margin-top:6px">${acts}</div></div>`;
+  }).join('');
+}
+
+function wire(){
+  const on=(id,fn)=>{const e=document.getElementById(id);if(e)e.onclick=fn};
+  on('leave',()=>{if(confirm('Leave this game?'))leave()});
+  on('start',()=>send({t:'start'}));on('shuffle',()=>send({t:'shuffle'}));
+  on('roll',()=>send({t:'roll'}));on('end',()=>send({t:'end'}));on('undo',()=>send({t:'undoRoll'}));
+  on('robberDone',()=>send({t:'robberDone'}));
+  on('reset',()=>{if(confirm('Clear all rolls and trades and go back to the lobby?'))send({t:'reset'})});
+  document.querySelectorAll('.man').forEach(b=>b.onclick=()=>send({t:'roll',n:+b.dataset.n}));
+  document.querySelectorAll('.st').forEach(b=>b.onclick=()=>{
+    const s=b.dataset.s,d=+b.dataset.d;
+    if(b.dataset.k){draft[s][b.dataset.k]=Math.max(0,Math.min(9,(draft[s][b.dataset.k]||0)+d))}
+    else draft[s]=Math.max(0,Math.min(9,draft[s]+d));
+    render();
+  });
+  on('clear',()=>{draft=freshDraft();render()});
+  on('offer',()=>{
+    const g=Object.values(draft.give).reduce((a,b)=>a+b,0)+draft.giveAny;
+    const w=Object.values(draft.want).reduce((a,b)=>a+b,0)+draft.wantAny;
+    if(!g||!w){toast('Pick something to give and something to get');return}
+    send({t:'trade',offer:draft});draft=freshDraft();
+  });
+  document.querySelectorAll('.acc').forEach(b=>b.onclick=()=>send({t:'accept',id:+b.dataset.id}));
+  document.querySelectorAll('.canc').forEach(b=>b.onclick=()=>send({t:'cancel',id:+b.dataset.id}));
+  document.querySelectorAll('.conf').forEach(b=>b.onclick=()=>send({t:'confirm',id:+b.dataset.id,with:b.dataset.w}));
+}
+
+/* shake the dice when a new roll arrives */
+const _render=render;
+render=function(){
+  if(S){const l=S.rolls[S.rolls.length-1];const id=l?l.id+':'+S.rolls.length:null;
+    if(id!==lastRollId){if(lastRollId!==null&&l)shakeNext=true;lastRollId=id}}
+  _render();
+};
+
+/* auto-rejoin after refresh */
+(function boot(){
+  const j=localStorage.cp_join;
+  if(j&&me.name){joinGame(me.name,j);return}
+  render();
+})();
+</script>
+</body>
+</html>
